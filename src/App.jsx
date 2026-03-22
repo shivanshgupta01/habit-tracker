@@ -23,7 +23,8 @@ const getToday = () => getDayKey(new Date());
 const getLast7Days = () => {
   const days = [];
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
+    const d = new Date();
+    d.setDate(d.getDate() - i);
     days.push(getDayKey(d));
   }
   return days;
@@ -33,10 +34,13 @@ const DAY_LABELS = ["S","M","T","W","T","F","S"];
 function ConfettiPiece({ style }) {
   return <div style={{ position: "fixed", width: 8, height: 8, borderRadius: 2, animation: "confettiFall 2s ease-in forwards", ...style }} />;
 }
+
 function Confetti({ show }) {
   const pieces = Array.from({ length: 40 }, (_, i) => ({
-    left: `${Math.random() * 100}%`, background: ["#F5A623","#4CAF82","#60A5FA","#C084FC","#FF6B6B"][i % 5],
-    animationDelay: `${Math.random() * 0.5}s`, top: "-10px",
+    left: `${Math.random() * 100}%`,
+    background: ["#F5A623","#4CAF82","#60A5FA","#C084FC","#FF6B6B"][i % 5],
+    animationDelay: `${Math.random() * 0.5}s`,
+    top: "-10px",
   }));
   if (!show) return null;
   return <>{pieces.map((s, i) => <ConfettiPiece key={i} style={s} />)}</>;
@@ -53,12 +57,15 @@ function Toast({ message, type, onClose }) {
 }
 
 export default function HabitTracker() {
+  const [userName, setUserName] = useState(() => localStorage.getItem("user_name") || "");
+  const [tempName, setTempName] = useState("");
   const [habits, setHabits] = useState(() => { try { return JSON.parse(localStorage.getItem("habits_v3")) || []; } catch { return []; } });
   const [completions, setCompletions] = useState(() => { try { return JSON.parse(localStorage.getItem("completions_v3")) || {}; } catch { return {}; } });
   const [reminders, setReminders] = useState(() => { try { return JSON.parse(localStorage.getItem("reminders_v3")) || {}; } catch { return {}; } });
   const [tab, setTab] = useState("today");
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const [confetti, setConfetti] = useState(false);
   const [toast, setToast] = useState(null);
   const [notifPermission, setNotifPermission] = useState("default");
@@ -78,7 +85,6 @@ export default function HabitTracker() {
     if ("Notification" in window) setNotifPermission(Notification.permission);
   }, []);
 
-  // Check every minute if any reminder should fire
   useEffect(() => {
     intervalRef.current = setInterval(() => {
       if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -90,16 +96,19 @@ export default function HabitTracker() {
         const rt = reminders[h.id];
         if (!rt || rt !== currentTime) return;
         if (!completions[getToday()]?.[h.id]) {
-          try {
-            new Notification("⏰ Habit Reminder", {
-              body: `Time to: ${h.emoji} ${h.name}`,
-            });
-          } catch (e) {}
+          try { new Notification("⏰ Habit Reminder", { body: `Time to: ${h.emoji} ${h.name}` }); } catch (e) {}
         }
       });
     }, 60000);
     return () => clearInterval(intervalRef.current);
   }, [habits, reminders, completions]);
+
+  const saveName = () => {
+    const name = tempName.trim();
+    if (!name) return;
+    localStorage.setItem("user_name", name);
+    setUserName(name);
+  };
 
   const requestNotifPermission = async () => {
     if (!("Notification" in window)) { showToastMsg("Browser doesn't support notifications", "error"); return; }
@@ -147,16 +156,16 @@ export default function HabitTracker() {
   const addHabit = () => {
     if (!newHabit.name.trim()) return;
     if (editId) {
-      setHabits(prev => prev.map(h => h.id === editId ? { ...h, name: newHabit.name, emoji: newHabit.emoji, category: newHabit.category } : h));
+      setHabits(prev => prev.map(h => h.id === editId ? { ...h, ...newHabit } : h));
       if (newHabit.reminderTime) setReminders(prev => ({ ...prev, [editId]: newHabit.reminderTime }));
       else setReminders(prev => { const n = { ...prev }; delete n[editId]; return n; });
       setEditId(null);
-      showToastMsg("Habit updated ✓", "success");
+      showToastMsg("✅ Habit updated!", "success");
     } else {
       const id = Date.now().toString();
-      setHabits(prev => [...prev, { name: newHabit.name, emoji: newHabit.emoji, category: newHabit.category, id, createdAt: today }]);
+      setHabits(prev => [...prev, { ...newHabit, id, createdAt: today }]);
       if (newHabit.reminderTime) setReminders(prev => ({ ...prev, [id]: newHabit.reminderTime }));
-      showToastMsg("Habit added ✓", "success");
+      showToastMsg("✅ Habit added!", "success");
     }
     setNewHabit({ name: "", emoji: "💧", category: "health", reminderTime: "" });
     setShowAdd(false);
@@ -165,7 +174,7 @@ export default function HabitTracker() {
   const deleteHabit = (id) => {
     setHabits(prev => prev.filter(h => h.id !== id));
     setReminders(prev => { const n = { ...prev }; delete n[id]; return n; });
-    showToastMsg("Habit deleted", "info");
+    showToastMsg("🗑️ Habit deleted", "info");
   };
 
   const startEdit = (h) => {
@@ -174,75 +183,99 @@ export default function HabitTracker() {
   };
 
   const exportCSV = () => {
-    if (habits.length === 0) { showToastMsg("No habits to export", "error"); return; }
-    const allDates = Object.keys(completions).sort();
-    const headers = ["Date", ...habits.map(h => `${h.emoji} ${h.name}`)];
-    const rows = allDates.map(date => {
-      const row = [date];
-      habits.forEach(h => row.push(completions[date]?.[h.id] ? "Done" : "Missed"));
-      return row;
+    if (habits.length === 0) return;
+    const allDays = Object.keys(completions).sort();
+    const header = ["Date", ...habits.map(h => `${h.emoji} ${h.name}`)].join(",");
+    const rows = allDays.map(day => {
+      const cols = habits.map(h => completions[day]?.[h.id] ? "Done" : "Missed");
+      return [day, ...cols].join(",");
     });
-    rows.push([]);
-    rows.push(["--- SUMMARY ---"]);
-    rows.push(["Habit", "Category", "Current Streak", "Longest Streak", "7-Day Rate", "Reminder"]);
-    habits.forEach(h => {
-      rows.push([`${h.emoji} ${h.name}`, CATEGORIES[h.category]?.label || h.category, getStreak(h.id), getLongestStreak(h.id), `${getWeekRate(h.id)}%`, reminders[h.id] || "None"]);
-    });
-    const csvContent = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `habits-${today}.csv`; a.click();
+    const a = document.createElement("a"); a.href = url;
+    a.download = `habit-tracker-${today}.csv`; a.click();
     URL.revokeObjectURL(url);
     showToastMsg("📥 CSV downloaded!", "success");
   };
 
-  const overallRate = habits.length === 0 ? 0 : Math.round(habits.reduce((sum, h) => sum + getWeekRate(h.id), 0) / habits.length);
+  const overallRate = habits.length === 0 ? 0 : Math.round(
+    habits.reduce((sum, h) => sum + getWeekRate(h.id), 0) / habits.length
+  );
   const progressPct = todayTotal === 0 ? 0 : (todayDone / todayTotal) * 100;
   const circumference = 2 * Math.PI * 36;
   const greetingHour = new Date().getHours();
   const greeting = greetingHour < 12 ? "Good Morning" : greetingHour < 17 ? "Good Afternoon" : "Good Evening";
   const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
-  return (
-    <div style={{ minHeight: "100vh", background: "#0A0D14", color: "#E2E8F0", fontFamily: "'DM Sans', sans-serif", position: "relative", overflowX: "hidden" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #0A0D14; } ::-webkit-scrollbar-thumb { background: #2A2D3E; border-radius: 4px; }
-        @keyframes confettiFall { 0%{transform:translateY(0) rotate(0deg);opacity:1} 100%{transform:translateY(100vh) rotate(720deg);opacity:0} }
-        @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes fadeIn { from{opacity:0} to{opacity:1} }
-        @keyframes checkBounce { 0%{transform:scale(1)} 40%{transform:scale(1.3)} 70%{transform:scale(0.9)} 100%{transform:scale(1)} }
-        .habit-card { animation: slideUp 0.4s ease both; }
-        .tab-btn { background: none; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 8px 12px; border-radius: 30px; transition: all 0.2s; }
-        .tab-btn.active { background: #F5A623; color: #0A0D14; }
-        .tab-btn.inactive { color: #64748B; }
-        .tab-btn.inactive:hover { color: #E2E8F0; }
-        .check-btn { width: 34px; height: 34px; border-radius: 50%; border: 2px solid; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; font-size: 15px; flex-shrink: 0; }
-        .check-btn:active { animation: checkBounce 0.3s ease; }
-        .grid-cell { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; transition: all 0.2s; }
-        .add-btn { position: fixed; bottom: 28px; right: 28px; width: 56px; height: 56px; border-radius: 50%; background: #F5A623; border: none; cursor: pointer; font-size: 26px; color: #0A0D14; display: flex; align-items:center; justify-content:center; box-shadow: 0 8px 24px rgba(245,166,35,0.4); transition: all 0.2s; z-index: 100; }
-        .add-btn:hover { transform: scale(1.1); }
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 200; animation: fadeIn 0.2s ease; backdrop-filter: blur(6px); padding: 16px; }
-        .modal { background: #141720; border: 1px solid #2A2D3E; border-radius: 20px; padding: 24px; width: 100%; max-width: 380px; animation: slideUp 0.3s ease; max-height: 90vh; overflow-y: auto; }
-        input, select { background: #1E2130; border: 1px solid #2A2D3E; border-radius: 10px; color: #E2E8F0; font-family: 'DM Sans',sans-serif; font-size: 14px; padding: 12px 14px; width: 100%; outline: none; transition: border 0.2s; }
-        input:focus, select:focus { border-color: #F5A623; }
-        input[type="time"] { color-scheme: dark; }
-        .emoji-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-        .emoji-btn { width: 36px; height: 36px; border-radius: 8px; border: 2px solid transparent; background: #1E2130; cursor: pointer; font-size: 18px; display:flex;align-items:center;justify-content:center; transition: all 0.15s; }
-        .emoji-btn.selected { border-color: #F5A623; background: #2A2010; }
-        .action-btn { border: none; border-radius: 10px; padding: 12px 24px; font-family: 'DM Sans',sans-serif; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-        .action-btn:hover { opacity: 0.88; }
-        .stat-card { background: #141720; border: 1px solid #1E2130; border-radius: 16px; padding: 20px; }
-        .bar { height: 6px; border-radius: 3px; background: #1E2130; overflow: hidden; }
-        .bar-fill { height: 100%; border-radius: 3px; transition: width 1s ease; }
-        .bg-glow { position: absolute; border-radius: 50%; filter: blur(80px); pointer-events: none; opacity: 0.12; }
-        .icon-btn { background: none; border: none; cursor: pointer; color: #64748B; font-size: 16px; padding: 4px; transition: color 0.2s; }
-        .icon-btn:hover { color: #E2E8F0; }
-        .reminder-tag { display: inline-flex; align-items: center; gap: 4px; background: #C084FC22; color: #C084FC; font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; }
-        .pill-btn { border: none; border-radius: 30px; padding: 6px 14px; font-family: 'DM Sans',sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; }
-      `}</style>
+  const STYLES = `
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #0A0D14; } ::-webkit-scrollbar-thumb { background: #2A2D3E; border-radius: 4px; }
+    @keyframes confettiFall { 0%{transform:translateY(0) rotate(0deg);opacity:1} 100%{transform:translateY(100vh) rotate(720deg);opacity:0} }
+    @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
+    @keyframes checkBounce { 0%{transform:scale(1)} 40%{transform:scale(1.3)} 70%{transform:scale(0.9)} 100%{transform:scale(1)} }
+    .habit-card { animation: slideUp 0.4s ease both; }
+    .tab-btn { background: none; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500; padding: 8px 16px; border-radius: 30px; transition: all 0.2s; }
+    .tab-btn.active { background: #F5A623; color: #0A0D14; }
+    .tab-btn.inactive { color: #64748B; }
+    .tab-btn.inactive:hover { color: #E2E8F0; }
+    .check-btn { width: 34px; height: 34px; border-radius: 50%; border: 2px solid; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; font-size: 15px; flex-shrink: 0; }
+    .check-btn:active { animation: checkBounce 0.3s ease; }
+    .grid-cell { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; transition: all 0.2s; }
+    .add-btn { position: fixed; bottom: 28px; right: 28px; width: 56px; height: 56px; border-radius: 50%; background: #F5A623; border: none; cursor: pointer; font-size: 26px; color: #0A0D14; display: flex; align-items:center; justify-content:center; box-shadow: 0 8px 24px rgba(245,166,35,0.4); transition: all 0.2s; z-index: 100; }
+    .add-btn:hover { transform: scale(1.1); }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 200; animation: fadeIn 0.2s ease; backdrop-filter: blur(4px); padding: 20px; }
+    .modal { background: #141720; border: 1px solid #2A2D3E; border-radius: 20px; padding: 28px; width: 100%; max-width: 380px; animation: slideUp 0.3s ease; max-height: 90vh; overflow-y: auto; }
+    input, select { background: #1E2130; border: 1px solid #2A2D3E; border-radius: 10px; color: #E2E8F0; font-family: 'DM Sans',sans-serif; font-size: 14px; padding: 12px 14px; width: 100%; outline: none; transition: border 0.2s; }
+    input:focus, select:focus { border-color: #F5A623; }
+    .emoji-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .emoji-btn { width: 36px; height: 36px; border-radius: 8px; border: 2px solid transparent; background: #1E2130; cursor: pointer; font-size: 18px; display:flex;align-items:center;justify-content:center; transition: all 0.15s; }
+    .emoji-btn.selected { border-color: #F5A623; background: #2A2010; }
+    .action-btn { border: none; border-radius: 10px; padding: 12px 24px; font-family: 'DM Sans',sans-serif; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .stat-card { background: #141720; border: 1px solid #1E2130; border-radius: 16px; padding: 20px; }
+    .bar { height: 6px; border-radius: 3px; background: #1E2130; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 3px; transition: width 1s ease; }
+    .bg-glow { position: absolute; border-radius: 50%; filter: blur(80px); pointer-events: none; opacity: 0.1; }
+    .icon-btn { background: #1E2130; border: 1px solid #2A2D3E; border-radius: 10px; cursor: pointer; padding: 8px 12px; transition: all 0.2s; color: #94A3B8; display: flex; align-items: center; gap: 6px; font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600; }
+    .icon-btn:hover { border-color: #F5A623; color: #F5A623; }
+    .reminder-tag { font-size: 11px; background: #C084FC22; color: #C084FC; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  `;
 
+  // ── WELCOME SCREEN ──────────────────────────────────────────────────
+  if (!userName) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#0A0D14", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "'DM Sans', sans-serif", position: "relative", overflow: "hidden" }}>
+        <style>{STYLES}</style>
+        <div className="bg-glow" style={{ width: 300, height: 300, background: "#F5A623", top: -80, right: -80 }} />
+        <div className="bg-glow" style={{ width: 200, height: 200, background: "#4CAF82", bottom: 60, left: -60 }} />
+        <div style={{ background: "#141720", border: "1px solid #1E2130", borderRadius: 28, padding: "44px 36px", width: "100%", maxWidth: 400, textAlign: "center", animation: "slideUp 0.5s ease" }}>
+          <div style={{ fontSize: 64, marginBottom: 20, animation: "float 3s ease-in-out infinite" }}>🌱</div>
+          <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 30, fontWeight: 800, color: "#E2E8F0", marginBottom: 8 }}>Welcome!</h1>
+          <p style={{ color: "#64748B", fontSize: 14, marginBottom: 32, lineHeight: 1.6 }}>Your personal habit tracker.<br />What should we call you?</p>
+          <input
+            placeholder="Enter your name..."
+            value={tempName}
+            onChange={e => setTempName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && saveName()}
+            style={{ marginBottom: 14, textAlign: "center", fontSize: 16 }}
+          />
+          <button onClick={saveName}
+            style={{ width: "100%", background: tempName.trim() ? "#F5A623" : "#1E2130", color: tempName.trim() ? "#0A0D14" : "#64748B", border: "none", borderRadius: 14, padding: 15, fontSize: 15, fontWeight: 700, cursor: tempName.trim() ? "pointer" : "default", fontFamily: "'DM Sans', sans-serif", transition: "all 0.3s", boxShadow: tempName.trim() ? "0 8px 24px rgba(245,166,35,0.35)" : "none" }}>
+            Let's Go 🚀
+          </button>
+          <p style={{ color: "#2A2D3E", fontSize: 11, marginTop: 16 }}>Your name is saved locally on your device only</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── MAIN APP ────────────────────────────────────────────────────────
+  return (
+    <div style={{ minHeight: "100vh", background: "#0A0D14", color: "#E2E8F0", fontFamily: "'DM Sans', sans-serif", position: "relative", overflow: "hidden" }}>
+      <style>{STYLES}</style>
       <div className="bg-glow" style={{ width: 300, height: 300, background: "#F5A623", top: -80, right: -80 }} />
       <div className="bg-glow" style={{ width: 200, height: 200, background: "#4CAF82", bottom: 100, left: -60 }} />
 
@@ -252,37 +285,31 @@ export default function HabitTracker() {
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "0 16px 100px" }}>
 
         {/* Header */}
-        <div style={{ padding: "28px 0 16px", animation: "slideUp 0.5s ease", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <p style={{ color: "#64748B", fontSize: 13, marginBottom: 4 }}>{dateLabel}</p>
-            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, letterSpacing: "-0.5px" }}>{greeting}, Shivansh 👋</h1>
-            <p style={{ color: "#64748B", fontSize: 12, marginTop: 5, fontStyle: "italic" }}>"{quote}"</p>
-          </div>
-          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-            <button className="icon-btn" title="Export CSV" onClick={exportCSV} style={{ fontSize: 22 }}>📥</button>
-            <button className="icon-btn" title="Notification Settings" onClick={() => setShowSettings(true)} style={{ fontSize: 22 }}>🔔</button>
+        <div style={{ padding: "28px 0 16px", animation: "slideUp 0.5s ease" }}>
+          <p style={{ color: "#64748B", fontSize: 13, marginBottom: 4 }}>{dateLabel}</p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, letterSpacing: "-0.5px" }}>
+                {greeting}, {userName} 👋
+              </h1>
+              <p style={{ color: "#64748B", fontSize: 12, marginTop: 4, fontStyle: "italic" }}>"{quote}"</p>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <button className="icon-btn" onClick={() => setShowSettings(true)}>🔔</button>
+              <button className="icon-btn" onClick={() => setShowExport(true)}>📥 CSV</button>
+            </div>
           </div>
         </div>
-
-        {/* Notification permission banner */}
-        {notifPermission !== "granted" && (
-          <div style={{ background: "#141720", border: "1px solid #2A2D3E", borderRadius: 14, padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, marginBottom: 14, animation: "slideUp 0.4s ease" }}>
-            <span style={{ fontSize: 20 }}>🔔</span>
-            <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>Enable Reminders</p>
-              <p style={{ fontSize: 11, color: "#64748B" }}>Get notified when it's time for your habits</p>
-            </div>
-            <button className="pill-btn" onClick={requestNotifPermission} style={{ background: "#F5A623", color: "#0A0D14" }}>Enable</button>
-          </div>
-        )}
 
         {/* Progress Ring */}
         <div style={{ background: "#141720", border: "1px solid #1E2130", borderRadius: 20, padding: "20px 24px", marginBottom: 20, display: "flex", alignItems: "center", gap: 20, animation: "slideUp 0.5s 0.1s ease both" }}>
           <svg width={90} height={90} style={{ flexShrink: 0 }}>
             <circle cx={45} cy={45} r={36} fill="none" stroke="#1E2130" strokeWidth={7} />
             <circle cx={45} cy={45} r={36} fill="none" stroke="#F5A623" strokeWidth={7}
-              strokeDasharray={circumference} strokeDashoffset={circumference - (circumference * progressPct) / 100}
-              strokeLinecap="round" style={{ transform: "rotate(-90deg)", transformOrigin: "50% 50%", transition: "stroke-dashoffset 0.8s ease" }} />
+              strokeDasharray={circumference}
+              strokeDashoffset={circumference - (circumference * progressPct) / 100}
+              strokeLinecap="round"
+              style={{ transform: "rotate(-90deg)", transformOrigin: "50% 50%", transition: "stroke-dashoffset 0.8s ease" }} />
             <text x={45} y={42} textAnchor="middle" fill="#F5A623" fontSize={18} fontWeight={700} fontFamily="Syne">{todayDone}</text>
             <text x={45} y={57} textAnchor="middle" fill="#64748B" fontSize={11} fontFamily="DM Sans">of {todayTotal}</text>
           </svg>
@@ -298,10 +325,10 @@ export default function HabitTracker() {
         </div>
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 3, background: "#141720", border: "1px solid #1E2130", borderRadius: 40, padding: 4, marginBottom: 20, animation: "slideUp 0.5s 0.15s ease both" }}>
-          {["today","weekly","stats","export"].map(t => (
+        <div style={{ display: "flex", gap: 4, background: "#141720", border: "1px solid #1E2130", borderRadius: 40, padding: 4, marginBottom: 20, animation: "slideUp 0.5s 0.15s ease both" }}>
+          {["today","weekly","stats"].map(t => (
             <button key={t} className={`tab-btn ${tab === t ? "active" : "inactive"}`} style={{ flex: 1 }} onClick={() => setTab(t)}>
-              {t === "today" ? "Today" : t === "weekly" ? "Weekly" : t === "stats" ? "Stats" : "Export"}
+              {t === "today" ? "Today" : t === "weekly" ? "This Week" : "Stats"}
             </button>
           ))}
         </div>
@@ -320,20 +347,21 @@ export default function HabitTracker() {
               const done = !!completions[today]?.[h.id];
               const streak = getStreak(h.id);
               const cat = CATEGORIES[h.category];
+              const hasReminder = !!reminders[h.id];
               return (
                 <div key={h.id} className="habit-card" style={{ animationDelay: `${i * 0.06}s`, background: "#141720", border: `1px solid ${done ? cat.color + "40" : "#1E2130"}`, borderRadius: 16, padding: "14px 16px", marginBottom: 10, display: "flex", alignItems: "center", gap: 12, transition: "all 0.3s" }}>
                   <span style={{ fontSize: 24, width: 36, textAlign: "center" }}>{h.emoji}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ fontWeight: 600, fontSize: 15, color: done ? "#64748B" : "#E2E8F0", textDecoration: done ? "line-through" : "none", transition: "all 0.3s" }}>{h.name}</p>
-                    <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center", flexWrap: "wrap" }}>
                       <span style={{ fontSize: 11, background: cat.color + "22", color: cat.color, padding: "2px 8px", borderRadius: 20, fontWeight: 500 }}>{cat.label}</span>
                       {streak > 0 && <span style={{ fontSize: 12, color: "#F5A623" }}>🔥 {streak}d</span>}
-                      {reminders[h.id] && <span className="reminder-tag">⏰ {reminders[h.id]}</span>}
+                      {hasReminder && <span className="reminder-tag">⏰ {reminders[h.id]}</span>}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <button className="icon-btn" onClick={() => startEdit(h)}>✏️</button>
-                    <button className="icon-btn" onClick={() => deleteHabit(h.id)}>🗑️</button>
+                    <button onClick={() => startEdit(h)} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B", fontSize: 15, padding: 4 }}>✏️</button>
+                    <button onClick={() => deleteHabit(h.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B", fontSize: 15, padding: 4 }}>🗑️</button>
                     <button className="check-btn" onClick={() => toggle(h.id)}
                       style={{ borderColor: done ? cat.color : "#2A2D3E", background: done ? cat.color + "22" : "transparent", color: done ? cat.color : "#2A2D3E" }}>
                       {done ? "✓" : ""}
@@ -364,7 +392,8 @@ export default function HabitTracker() {
                     ))}
                   </div>
                   {habits.map((h, hi) => {
-                    const rate = getWeekRate(h.id); const cat = CATEGORIES[h.category];
+                    const rate = getWeekRate(h.id);
+                    const cat = CATEGORIES[h.category];
                     return (
                       <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, animation: `slideUp 0.4s ${hi * 0.05}s ease both` }}>
                         <span style={{ fontSize: 18 }}>{h.emoji}</span>
@@ -386,20 +415,29 @@ export default function HabitTracker() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   {habits.map(h => {
-                    const streak = getStreak(h.id); const longest = getLongestStreak(h.id); const rate = getWeekRate(h.id); const cat = CATEGORIES[h.category];
+                    const streak = getStreak(h.id);
+                    const longest = getLongestStreak(h.id);
+                    const rate = getWeekRate(h.id);
+                    const cat = CATEGORIES[h.category];
                     return (
                       <div key={h.id} className="stat-card">
-                        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                           <span>{h.emoji}</span>
                           <p style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.name}</p>
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between" }}>
-                          {[["🔥"+streak,"streak","#F5A623"],[rate+"%","week",cat.color],[longest,"best","#C084FC"]].map(([v,l,c])=>(
-                            <div key={l} style={{ textAlign: "center" }}>
-                              <p style={{ fontSize: 17, fontFamily: "Syne", fontWeight: 700, color: c }}>{v}</p>
-                              <p style={{ fontSize: 10, color: "#64748B" }}>{l}</p>
-                            </div>
-                          ))}
+                          <div style={{ textAlign: "center" }}>
+                            <p style={{ fontSize: 20, fontFamily: "Syne", fontWeight: 700, color: "#F5A623" }}>🔥{streak}</p>
+                            <p style={{ fontSize: 10, color: "#64748B" }}>streak</p>
+                          </div>
+                          <div style={{ textAlign: "center" }}>
+                            <p style={{ fontSize: 20, fontFamily: "Syne", fontWeight: 700, color: cat.color }}>{rate}%</p>
+                            <p style={{ fontSize: 10, color: "#64748B" }}>week</p>
+                          </div>
+                          <div style={{ textAlign: "center" }}>
+                            <p style={{ fontSize: 20, fontFamily: "Syne", fontWeight: 700, color: "#C084FC" }}>{longest}</p>
+                            <p style={{ fontSize: 10, color: "#64748B" }}>best</p>
+                          </div>
                         </div>
                       </div>
                     );
@@ -431,7 +469,8 @@ export default function HabitTracker() {
               <div className="stat-card" style={{ marginBottom: 12 }}>
                 <p style={{ fontFamily: "Syne", fontWeight: 700, marginBottom: 14, fontSize: 15 }}>Habit Performance</p>
                 {habits.map(h => {
-                  const rate = getWeekRate(h.id); const cat = CATEGORIES[h.category];
+                  const rate = getWeekRate(h.id);
+                  const cat = CATEGORIES[h.category];
                   return (
                     <div key={h.id} style={{ marginBottom: 12 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
@@ -445,69 +484,19 @@ export default function HabitTracker() {
               </div>
             )}
             <div className="stat-card">
-              <p style={{ fontFamily: "Syne", fontWeight: 700, marginBottom: 12, fontSize: 15 }}>Active Reminders</p>
-              {habits.filter(h => reminders[h.id]).length === 0
-                ? <p style={{ color: "#64748B", fontSize: 13 }}>No reminders set. Edit a habit to add one.</p>
-                : habits.filter(h => reminders[h.id]).map(h => (
-                  <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                    <span>{h.emoji}</span>
-                    <p style={{ flex: 1, fontSize: 13 }}>{h.name}</p>
-                    <span className="reminder-tag">⏰ {reminders[h.id]}</span>
+              <p style={{ fontFamily: "Syne", fontWeight: 700, marginBottom: 12, fontSize: 15 }}>By Category</p>
+              {Object.entries(CATEGORIES).map(([key, cat]) => {
+                const count = habits.filter(h => h.category === key).length;
+                if (count === 0) return null;
+                return (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: cat.color, flexShrink: 0 }} />
+                    <p style={{ flex: 1, fontSize: 13 }}>{cat.label}</p>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: cat.color }}>{count}</p>
                   </div>
-                ))
-              }
-            </div>
-          </div>
-        )}
-
-        {/* EXPORT */}
-        {tab === "export" && (
-          <div style={{ animation: "slideUp 0.4s ease" }}>
-            <div className="stat-card" style={{ marginBottom: 12 }}>
-              <p style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 16, marginBottom: 6 }}>Export Your Data</p>
-              <p style={{ color: "#64748B", fontSize: 13, marginBottom: 20 }}>Download your full habit history as a CSV. Open it in Excel, Google Sheets, or Notion.</p>
-
-              <div style={{ background: "#1E2130", borderRadius: 12, padding: 16, marginBottom: 14 }}>
-                <p style={{ fontSize: 12, color: "#94A3B8", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>What's included</p>
-                {["✅ Daily completion history (all time)","📊 Per-habit streaks & rates","🏆 Longest streak records","⏰ Reminder times","📁 Category tags"].map(item => (
-                  <p key={item} style={{ fontSize: 13, color: "#CBD5E1", marginBottom: 6 }}>{item}</p>
-                ))}
-              </div>
-
-              <div style={{ background: "#1E2130", borderRadius: 12, padding: 16, marginBottom: 20 }}>
-                <p style={{ fontSize: 12, color: "#94A3B8", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Data Summary</p>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, textAlign: "center" }}>
-                  {[
-                    [habits.length, "Habits"],
-                    [Object.keys(completions).length, "Days tracked"],
-                    [Object.values(completions).reduce((s, d) => s + Object.values(d).filter(Boolean).length, 0), "Completions"],
-                  ].map(([v, l]) => (
-                    <div key={l}>
-                      <p style={{ fontFamily: "Syne", fontSize: 22, fontWeight: 800, color: "#F5A623" }}>{v}</p>
-                      <p style={{ fontSize: 11, color: "#64748B" }}>{l}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button className="action-btn" onClick={exportCSV}
-                style={{ width: "100%", background: habits.length === 0 ? "#1E2130" : "linear-gradient(135deg, #F5A623, #FF8C42)", color: habits.length === 0 ? "#64748B" : "#0A0D14", fontSize: 15, padding: 14, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-                <span style={{ fontSize: 20 }}>📥</span> Download CSV
-              </button>
-              {habits.length === 0 && <p style={{ textAlign: "center", fontSize: 12, color: "#64748B", marginTop: 10 }}>Add some habits first</p>}
-            </div>
-
-            <div className="stat-card">
-              <p style={{ fontFamily: "Syne", fontWeight: 700, fontSize: 15, marginBottom: 12 }}>CSV Preview</p>
-              <div style={{ background: "#0A0D14", borderRadius: 10, padding: 14, overflowX: "auto" }}>
-                <p style={{ fontFamily: "monospace", fontSize: 11, color: "#4CAF82", marginBottom: 4 }}>
-                  Date, {habits.length > 0 ? habits.map(h => `${h.emoji} ${h.name}`).join(", ") : "Habit 1, Habit 2..."}
-                </p>
-                <p style={{ fontFamily: "monospace", fontSize: 11, color: "#64748B" }}>
-                  {today}, {habits.length > 0 ? habits.map(() => "Done/Missed").join(", ") : "Done, Missed..."}
-                </p>
-                <p style={{ fontFamily: "monospace", fontSize: 11, color: "#3A3D4E", marginTop: 4 }}>...</p>
-              </div>
+                );
+              })}
+              {habits.length === 0 && <p style={{ color: "#64748B", fontSize: 13 }}>No habits yet</p>}
             </div>
           </div>
         )}
@@ -534,8 +523,6 @@ export default function HabitTracker() {
             <select value={newHabit.category} onChange={e => setNewHabit(p => ({ ...p, category: e.target.value }))} style={{ marginBottom: 14 }}>
               {Object.entries(CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
-
-            {/* Reminder section */}
             <p style={{ fontSize: 12, color: "#64748B", marginBottom: 8 }}>⏰ Daily Reminder <span style={{ color: "#3A3D4E" }}>(optional)</span></p>
             <div style={{ background: "#1E2130", border: `1px solid ${newHabit.reminderTime ? "#C084FC66" : "#2A2D3E"}`, borderRadius: 10, padding: "10px 14px", marginBottom: 6, display: "flex", alignItems: "center", gap: 10, transition: "border 0.2s" }}>
               <span style={{ fontSize: 18 }}>🔔</span>
@@ -544,13 +531,12 @@ export default function HabitTracker() {
                 style={{ background: "transparent", border: "none", padding: 0, flex: 1, fontSize: 15 }} />
               {newHabit.reminderTime && (
                 <button onClick={() => setNewHabit(p => ({ ...p, reminderTime: "" }))}
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B", fontSize: 20, lineHeight: 1 }}>×</button>
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B", fontSize: 20 }}>×</button>
               )}
             </div>
             <p style={{ fontSize: 11, marginBottom: 18, color: notifPermission === "granted" ? "#4CAF82" : "#F5A623" }}>
-              {notifPermission === "granted" ? "✓ Notifications enabled — reminder will fire daily" : "⚠️ Enable notifications first for reminders to work"}
+              {notifPermission === "granted" ? "✓ Notifications enabled" : "⚠️ Enable notifications first (tap 🔔 top right)"}
             </p>
-
             <div style={{ display: "flex", gap: 10 }}>
               <button className="action-btn" onClick={() => setShowAdd(false)} style={{ flex: 1, background: "#1E2130", color: "#94A3B8" }}>Cancel</button>
               <button className="action-btn" onClick={addHabit} style={{ flex: 2, background: "#F5A623", color: "#0A0D14" }}>{editId ? "Save Changes" : "Add Habit"}</button>
@@ -559,13 +545,12 @@ export default function HabitTracker() {
         </div>
       )}
 
-      {/* NOTIFICATION SETTINGS MODAL */}
+      {/* NOTIFICATIONS MODAL */}
       {showSettings && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowSettings(false)}>
           <div className="modal">
             <h2 style={{ fontFamily: "Syne", fontSize: 20, fontWeight: 800, marginBottom: 6 }}>🔔 Notifications</h2>
             <p style={{ color: "#64748B", fontSize: 13, marginBottom: 20 }}>Get reminded when it's time to complete your habits</p>
-
             <div style={{ background: "#1E2130", borderRadius: 12, padding: 16, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <p style={{ fontSize: 14, fontWeight: 600 }}>Status</p>
@@ -574,21 +559,19 @@ export default function HabitTracker() {
                 </span>
               </div>
               <p style={{ fontSize: 12, color: "#64748B" }}>
-                {notifPermission === "granted" ? "Reminders will fire at your set times each day." : notifPermission === "denied" ? "Blocked by browser. Go to browser Settings → Site permissions to re-enable." : "Click the button below to allow reminders."}
+                {notifPermission === "granted" ? "Reminders will fire at your set times each day." : notifPermission === "denied" ? "Blocked by browser. Go to Settings → Site permissions to re-enable." : "Click below to allow reminders."}
               </p>
             </div>
-
-            {notifPermission === "default" && (
+            {notifPermission !== "granted" && (
               <button className="action-btn" onClick={requestNotifPermission}
                 style={{ width: "100%", background: "#F5A623", color: "#0A0D14", marginBottom: 14 }}>
                 Enable Notifications
               </button>
             )}
-
             <div style={{ background: "#1E2130", borderRadius: 12, padding: 16, marginBottom: 14 }}>
-              <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Habits with Reminders</p>
+              <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Active Reminders</p>
               {habits.filter(h => reminders[h.id]).length === 0
-                ? <p style={{ fontSize: 13, color: "#64748B" }}>No reminders set yet. Edit any habit to add one.</p>
+                ? <p style={{ fontSize: 13, color: "#64748B" }}>No reminders set. Edit any habit to add one.</p>
                 : habits.filter(h => reminders[h.id]).map(h => (
                   <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, padding: "8px 12px", background: "#141720", borderRadius: 10 }}>
                     <span>{h.emoji}</span>
@@ -600,9 +583,55 @@ export default function HabitTracker() {
                 ))
               }
             </div>
+            <button className="action-btn" onClick={() => setShowSettings(false)} style={{ width: "100%", background: "#1E2130", color: "#94A3B8" }}>Close</button>
+          </div>
+        </div>
+      )}
 
-            <button className="action-btn" onClick={() => setShowSettings(false)}
-              style={{ width: "100%", background: "#1E2130", color: "#94A3B8" }}>Close</button>
+      {/* EXPORT CSV MODAL */}
+      {showExport && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowExport(false)}>
+          <div className="modal">
+            <h2 style={{ fontFamily: "Syne", fontSize: 20, fontWeight: 800, marginBottom: 6 }}>📥 Export Data</h2>
+            <p style={{ color: "#64748B", fontSize: 13, marginBottom: 20 }}>Download your full habit history as a CSV file</p>
+            <div style={{ background: "#1E2130", borderRadius: 12, padding: 16, marginBottom: 14 }}>
+              <p style={{ fontSize: 12, color: "#94A3B8", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>What's included</p>
+              {["✅ Daily completion history","🔥 Streak data per habit","📁 Category & emoji info","⏰ Reminder times"].map(item => (
+                <p key={item} style={{ fontSize: 13, color: "#CBD5E1", marginBottom: 6 }}>{item}</p>
+              ))}
+            </div>
+            <div style={{ background: "#1E2130", borderRadius: 12, padding: 16, marginBottom: 14 }}>
+              <p style={{ fontSize: 12, color: "#94A3B8", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Your Data</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, textAlign: "center" }}>
+                {[
+                  [habits.length, "Habits"],
+                  [Object.keys(completions).length, "Days tracked"],
+                  [Object.values(completions).reduce((s, d) => s + Object.values(d).filter(Boolean).length, 0), "Total done"],
+                ].map(([v, l]) => (
+                  <div key={l}>
+                    <p style={{ fontFamily: "Syne", fontSize: 22, fontWeight: 800, color: "#F5A623" }}>{v}</p>
+                    <p style={{ fontSize: 11, color: "#64748B" }}>{l}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ background: "#0A0D14", borderRadius: 10, padding: 14, marginBottom: 14, overflowX: "auto" }}>
+              <p style={{ fontFamily: "monospace", fontSize: 11, color: "#4CAF82", marginBottom: 4 }}>
+                Date, {habits.length > 0 ? habits.slice(0, 3).map(h => `${h.name}`).join(", ") + (habits.length > 3 ? "..." : "") : "Habit 1, Habit 2..."}
+              </p>
+              <p style={{ fontFamily: "monospace", fontSize: 11, color: "#64748B" }}>
+                {today}, {habits.length > 0 ? habits.slice(0, 3).map(h => completions[today]?.[h.id] ? "Done" : "Missed").join(", ") : "Done, Missed..."}
+              </p>
+              <p style={{ fontFamily: "monospace", fontSize: 11, color: "#2A2D3E", marginTop: 4 }}>...</p>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="action-btn" onClick={() => setShowExport(false)} style={{ flex: 1, background: "#1E2130", color: "#94A3B8" }}>Cancel</button>
+              <button className="action-btn" onClick={() => { exportCSV(); setShowExport(false); }}
+                style={{ flex: 2, background: habits.length === 0 ? "#1E2130" : "linear-gradient(135deg, #F5A623, #FF8C42)", color: habits.length === 0 ? "#64748B" : "#0A0D14", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <span>📥</span> Download CSV
+              </button>
+            </div>
+            {habits.length === 0 && <p style={{ textAlign: "center", fontSize: 12, color: "#64748B", marginTop: 10 }}>Add some habits first</p>}
           </div>
         </div>
       )}
